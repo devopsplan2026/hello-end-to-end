@@ -21,9 +21,9 @@
 
 
 from flask import Flask
-#from prometheus_flask_exporter import PrometheusMetrics
+
 app = Flask(__name__)
-#metrics = PrometheusMetrics(app)   # <-- enables /metrics
+
 @app.route("/")
 def hello():
     return "Hello World!"                   
@@ -70,13 +70,13 @@ CMD ["python", "app.py"]
 6. Push the docker image to the dockerhub
 --------------------------------
 
-create a dockerhub acount if you already have that's fine
-- How to create a dockerhub acount
-> Go to https://hub.docker.com/ and sign up for an account
-> After the creating account go to terminal and run "docker login" command and link and otp is showing copy the otp and click on link and paste otp and login successfully
+Create a DockerHub account. If you already have one, that's fine. How to create a DockerHub account.
+Access https://hub.docker.com/ and create an account.
+After creating an account, go to the terminal and run the 'docker login' command. The link and OTP will be displayed. Copy the OTP and click on the link. Paste the OTP and log in successfully.
 
-> docker tag hello:latest <your-dockerhub-username>/hello:latest
-> docker push <your-dockerhub-username>/hello:latest
+> docker tag hello:latest /hello:latest
+> docker push /hello:latest
+
 
 7. Create a jenkins file
 ------------------------
@@ -130,6 +130,8 @@ pipeline {
         }
     }
 }
+
+Now via webhook connect the jenkins with github
 
 
 8. Now we are creating a kubernetes cluster with terraform
@@ -357,7 +359,10 @@ we are installing the prometheus via the helm :
 
 > helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 > helm repo update
-> helm install prometheus prometheus-community/kube-prometheus-stack -n monitoring --create-namespace 
+> helm install prometheus prometheus-community/kube-prometheus-stack -n monitoring --create-namespace
+>
+> kubectl get all ns
+> kubectl get all -n monitoring 
 
 Now modify the requirement.txt file
 
@@ -429,6 +434,214 @@ spec:
 -------------------------------------------------
 
 > kubectl apply -f servicemonitor.yaml
+> kubectl get all -n monitoring
+
+> kubectl prot-forward -n monitoring svc/prometheus-kube-prometheus-prometheus 9090:9090
+>
+> Now go to url and click on status >> target health
 
 
+
+Grafana Dashboard
 ----------------------------------------
+ 
+> grafana password:
+kubectl --namespace monitoring get secrets prometheus-grafana -o jsonpath="{.data.admin-password}" | base64 -d ; echo
+
+Ui is working on 9093 now we can port mapping
+> kubectl port-forward -n monitoring svc/prometheus-grafana 9093:80
+
+
+Dashboard setup:
+
+Click in DashBoard and Right side + icon . click on that and select Import dashboard.
+
+> In the find filed enter the code of "3662"
+>  grafana dashboard templates can search on googles as per the requirement you can set the dashboard.
+
+
+Continous delivery ( ArgoCD )
+----------------------------------------------------------------------------------------
+
+1. Automate the CI
+------------------------------
+add the stage in the jenkinsfile
+
+stage('Update Deployment File') {
+    steps {
+        sh """
+        sed -i 's|image: .*|image: ${DOCKERHUB_USERNAME}/flask-hello:${IMAGE_TAG}|' deployment.yaml
+
+        git config user.name "Jenkins"
+        git config user.email "jenkins@example.com"
+
+        git add deployment.yaml
+        git commit -m "Deploy new image ${IMAGE_TAG}"
+        git push
+        """
+    }
+}
+
+whole pipeline
+
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_NAME = "devoopsguru/hello"
+        DEPLOYMENT_FILE = "deployment.yaml"
+    }
+
+    stages {
+
+        stage('Git Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Generate Image Tag') {
+            steps {
+                script {
+                    env.IMAGE_TAG = new Date().format("yyyy-MM-dd-HHmmss")
+                    env.FULL_IMAGE = "${IMAGE_NAME}:${IMAGE_TAG}"
+
+                    echo "Image Name: ${FULL_IMAGE}"
+                }
+            }
+        }
+
+        stage('Docker Login') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'docker_cred',
+                        usernameVariable: 'DOCKER_USERNAME',
+                        passwordVariable: 'DOCKER_PASSWORD'
+                    )
+                ]) {
+
+                    sh '''
+                    echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+                    '''
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh '''
+                docker build -t ${FULL_IMAGE} .
+                '''
+            }
+        }
+
+        stage('Push Docker Image') {
+            steps {
+                sh '''
+                docker push ${FULL_IMAGE}
+                '''
+            }
+        }
+
+        stage('Update Kubernetes Deployment File') {
+            steps {
+                sh """
+                sed -i 's|image: .*|image: ${FULL_IMAGE}|' ${DEPLOYMENT_FILE}
+
+                git config user.name "Jenkins"
+                git config user.email "jenkins@example.com"
+
+                git add ${DEPLOYMENT_FILE}
+                git commit -m "Updated image to ${FULL_IMAGE}" || echo "No changes to commit"
+
+                git push
+                """
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                sh '''
+                kubectl apply -f deployment.yaml
+                '''
+            }
+        }
+
+    }
+
+    post {
+
+        success {
+            echo "Pipeline executed successfully"
+        }
+
+        failure {
+            echo "Pipeline failed"
+        }
+
+    }
+}
+
+2. Install the ArgoCD
+
+kubectl create namespace argocd
+kubectl apply -n argocd --server-side --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+> kubeclt get all -n argocd
+
+kubectl patch svc argocd-server -n argocd -p "{\"spec\": {\"type\": \"LoadBalancer\"}}"
+
+** Note: Port forward works BUT for ArgoCD in Codespace doesn't run...
+Don't know why....
+** 
+
+kubeclt get svc -n agrocd
+
+copy the external IP of argocd-server and open it with new tab
+Username: admin
+Password: 
+kubectl get secret argocd-secret -n argocd -o jsonpath="{.data.server\.secretkey}" | base64 -d
+
+after the login 
+
+- click on application and set-up that.
+  General:
+  Appication Name: demo or any
+  Project Name: Default
+  Sync Policy: Automati and check-mark down box.
+
+  Source:
+  Repo link:
+  Revision: main
+  Path: .
+  Destination:
+  Cluster URL : default on chooose
+  NameSpace: default
+
+  Scroll up and click on edit as yaml
+
+  apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: demo
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/<username>/hello.git
+    targetRevision: main
+    path: .
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+
+  Save and exit
+
+
+  Now check the replicas and enjoy the full projet automate.
+  
