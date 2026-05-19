@@ -16,30 +16,28 @@
   > 9. Install eksctl
 
 
-create a app.py file and paste the content
-
-1. from flask import Flask
+1. create a app.py file and paste the content
 -------------------------------------
 
-from prometheus_flask_exporter import PrometheusMetrics
 
+from flask import Flask
+#from prometheus_flask_exporter import PrometheusMetrics
 app = Flask(__name__)
-metrics = PrometheusMetrics(app)   # <-- enables /metrics
-
+#metrics = PrometheusMetrics(app)   # <-- enables /metrics
 @app.route("/")
 def hello():
     return "Hello World!"                   
-
 @app.route("/new")
 def new():
     return "FINAL CHECK"            
-
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
 
-2. To check it is run or not via run the command
+-------------------------------------------------------------------------------------
+2. run the python app.py if there is showing error that means there flask is not installed. So run:
+
   > pip intall flask
-   > python app.py 
+  > python app.py 
 
 3. To create a requirements.txt file and paste the content
 --------------------------------
